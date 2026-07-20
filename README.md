@@ -1,5 +1,117 @@
 # Reward Attribution Integrity System
 
+> TL;DR (for recruiters / quick scan)
+
+# Reward Attribution Integrity System
+
+**Detects fraudulent mobile-attribution traffic without labels, and translates model output into business decisions.**
+
+Built on ~185M rows of real clickstream data, this system identifies high-risk entities using behavioural anomalies (not conversions), and optimises intervention thresholds based on economic impact.
+
+---
+
+## Key Results
+
+**Synthetic validation (ground truth)**
+- ROC-AUC: 0.998  
+- PR-AUC: 0.974  
+- 97.6% of fraud captured in top 1%
+
+**Real data (TalkingData, proxy labels)**
+- ROC-AUC: 0.736  
+- PR-AUC: 0.078  
+- Precision @ top 1%: ~6%  
+
+---
+
+## Business Outcome
+
+At the recommended operating point:
+
+- Blocks: 573 entities (~0.75% of traffic)  
+- Precision: ~6%  
+- Legitimate users impacted: 0.72%  
+- Estimated value protected: **$792**  
+
+**Design choice:** prioritise catching high-cost fraud over maximising precision.  
+False positives tend to be low-activity users; true positives concentrate among high-volume actors driving disproportionate loss.
+
+---
+
+## What Makes This Different
+
+### 1. No label leakage — by design
+Detection uses only behavioural signals (timing, diversity, patterns).  
+Conversion labels are **strictly excluded** from features and enforced via tests.
+
+---
+
+### 2. Ensemble of complementary detectors
+- Clustering → coordinated fleets  
+- Timing distribution → bots / scripted behaviour  
+- Population drift → actors deviating from baseline  
+
+Scores are rank-normalised and combined to avoid scale dominance.
+
+---
+
+### 3. Decision layer, not just a model
+A threshold sweep maximises **net value**, not accuracy:
+
+- Fraud payout: $2  
+- False block cost: $5  
+
+This converts model output into a **clear stakeholder decision**.
+
+---
+
+### 4. Real-world constraint: detectability floor
+At a 0.17% base conversion rate: ~1,760 clicks required before “0 conversions” is statistically suspicious
+
+
+Low-volume fraud cannot be proven — only inferred.
+
+→ Explains gap between:
+- PR-AUC 0.974 (synthetic truth)
+- PR-AUC 0.078 (real proxy)
+
+The model detects behaviour the labels cannot confirm.
+
+---
+
+## System Design
+
+- DuckDB pipeline → processes 200M+ rows out-of-core  
+- Airflow DAG → daily runs with spike + drop alerting  
+- Streamlit dashboard → interactive threshold tuning  
+- 19 tests → includes leakage and statistical correctness checks  
+
+---
+
+## Example Fraud Signals
+
+Flagged entities typically show:
+- Near-zero variance in click timing (automation)
+- High volume with zero conversions
+- Flat 24h activity (non-human patterns)
+
+---
+
+## Run It
+
+```bash
+python scripts/make_synthetic_data.py --rows 1200000
+python -m src.pipeline
+streamlit run dashboard/app.py
+
+
+---
+
+
+## Full Project Breakdown
+
+# Reward Attribution Integrity System
+
 **Unsupervised detection of fraudulent mobile-attribution traffic, with an explicit sensitivity-vs-business-impact decision layer, running on an automated pipeline.**
 
 Roughly a quarter of global mobile ad spend is estimated lost to click farms, fake installs, SDK spoofing, and emulator farms. For a rewarded-advertising platform — where users earn real value for genuine engagement — fraud is not only a payout leak, it corrodes the value exchange the platform is built on.
@@ -7,12 +119,37 @@ Roughly a quarter of global mobile ad spend is estimated lost to click farms, fa
 This system detects fraudulent actors **without using conversion labels**, quantifies the tradeoff between catching fraud and wrongly blocking real users, and packages the result as a monitored daily pipeline rather than a one-off analysis.
 
 ```
-Detection quality      ROC-AUC 0.998  ·  PR-AUC 0.974  ·  97.6% recall in top 1% of scores
-Operating point        blocks 95% of fraudulent traffic while affecting 0.20% of legitimate entities
-Detector independence  pairwise score correlations 0.21 / 0.10 / −0.22 (complementary, not redundant)
-```
+Detection quality (synthetic, ground truth)
+ROC-AUC 0.998 · PR-AUC 0.974 · 97.6% recall in top 1%
 
+Detection quality (real data, proxy labels)
+ROC-AUC 0.736 · PR-AUC 0.078 · ~6.0% precision in top 1%
+```
+## Real Data Results (TalkingData)
+
+- Rows: 184,903,890
+- Conversion rate: 0.247%
+- Distinct IPs: 277,396
+- Entities analysed: 76,603
+
+Evaluation (vs statistical proxy):
+- ROC-AUC: 0.736
+- PR-AUC: 0.078
+- Precision @ top 1%: 6.0%
+
+Operating point:
+- Threshold: 0.98
+- Entities blocked: 573
+- Legitimate impact: 0.72%
+- Net value protected: $792
+
+The large gap between synthetic and real-data performance is expected. 
+Synthetic data provides ground truth and validates that the detectors work. 
+Real data uses a statistical proxy label, which is both noisy and incomplete due to the detectability floor — many fraudulent entities cannot be proven as such at low volume.
+
+As a result, real-world metrics appear weaker, but better reflect deployment conditions.
 ---
+
 
 ## Quickstart
 
@@ -62,9 +199,13 @@ A score is not a decision. Two assumptions — `$2.00` payout per install, `$5.0
 
 The threshold sweep maximises net value subject to a hard guardrail (≤1% of legitimate entities blocked), producing a statement a non-technical stakeholder can act on:
 
-> Recommended operating threshold **0.98**. Blocks 58 entities, catching **95%** of estimated fraudulent traffic at **34%** precision, affecting **0.20%** of legitimate entities. Estimated net value protected: **$471** over the analysed period.
+> Recommended operating threshold **0.98**. Blocks 573 entities, catching **~1%** of estimated fraudulent traffic at **~6%** precision, affecting **0.72%** of legitimate entities. Estimated net value protected: **$792** over the analysed period.
 
-Precision of 34% is acceptable *by design*: the fraud caught is high-volume and expensive, the false positives are low-volume and cheap. Optimising precision would have meant catching less of what actually costs money.
+Precision of ~6% is acceptable *by design*. The detector is optimised for economic impact rather than classification purity: it prioritises identifying high-volume, high-cost fraud patterns, even if that means flagging some low-volume legitimate entities.
+
+In practice, false positives tend to be low-activity actors with minimal financial impact, while true positives are concentrated among high-frequency entities driving disproportionate cost. Optimising for higher precision would reduce coverage of these costly behaviours and lower total value protected.
+
+In this setting, false positives tend to be low-activity entities with minimal economic impact, while true positives are concentrated among high-frequency actors driving disproportionate cost. Optimising purely for precision would reduce coverage of these costly behaviours and lower total value protected.
 
 ### 4. Automation and monitoring
 
@@ -86,7 +227,7 @@ At a 0.17% baseline conversion rate, **an entity needs ~1,760 clicks before zero
 
 This reframed the evaluation and drove a design change: the cross-population detector now shrinks scores for low-volume entities rather than trusting them.
 
-It also explains the honest gap in the results — PR-AUC is **0.974** against planted truth but **0.579** against the statistical proxy, because the proxy can only recognise entities above the floor. **The detector finds fraud the proxy cannot prove.** Reporting only the flattering number would hide that.
+It also explains the honest gap in the results — PR-AUC is **0.974** against planted truth but **0.078** against the statistical proxy, because the proxy can only recognise entities above the floor. **The detector finds fraud the proxy cannot prove.** Reporting only the flattering number would hide that.
 
 ---
 
@@ -108,7 +249,9 @@ tests/       19 tests, including leakage guards and statistical correctness
 
 ## Engineering notes
 
-**Scale.** DuckDB streams the CSV and aggregates out-of-core, so peak memory stays bounded regardless of file size — 200M rows never enter pandas. Every id column is downcast (`int64 → uint32/uint16`), roughly a 70% reduction in scanned footprint.
+**Scale.** DuckDB streams the CSV and aggregates out-of-core, so peak memory remains bounded even at ~185M rows — the dataset is never fully loaded into pandas.
+
+**Memory efficiency.** A 500k-row benchmark shows dtype downcasting (`int64 → uint32/uint16`) reduces memory usage by ~72%. At full scale (~200M rows), this corresponds to ~14 GB → ~3.9 GB, saving ~10 GB of memory.
 
 **Robust statistics throughout.** Median/MAD rather than mean/std, because the data is contaminated by the very thing being hunted: a 200,000-click farm inflates the standard deviation and **hides inside its own effect on the baseline**. Robust estimators have a ~50% breakdown point.
 

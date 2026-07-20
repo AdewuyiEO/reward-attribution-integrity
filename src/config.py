@@ -15,7 +15,7 @@ SQL_DIR = ROOT / "sql"
 # ---------------------------------------------------------------------------
 # Point this at data/train.csv once your download finishes.
 # Keep data/train_synthetic.csv for fast iteration and CI.
-SOURCE_CSV = DATA_DIR / "train_synthetic.csv"
+SOURCE_CSV = DATA_DIR / "train.csv"
 DUCKDB_PATH = DATA_DIR / "fraud.duckdb"
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ LEAKAGE_COLS = ["attributed_time"]
 # ---------------------------------------------------------------------------
 # The unit of analysis. Fraud lives in entities, not in individual clicks.
 ENTITY_KEYS = ["ip"]          # alternatives: ["ip","device","os"], ["channel"]
-MIN_CLICKS = 30               # entities below this are too sparse to judge
+MIN_CLICKS = 100              # entities below this are too sparse to judge
 
 # ---------------------------------------------------------------------------
 # Detector weights (ensemble)
