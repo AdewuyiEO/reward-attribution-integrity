@@ -18,3 +18,4 @@ venv/
 
 # os
 .DS_Store
+airflow-env/
