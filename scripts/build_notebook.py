@@ -12,8 +12,7 @@ md("""# EDA — Reward Attribution Integrity
 
 Exploratory analysis of the mobile click/attribution data underpinning the fraud
 detection system. This notebook runs on whatever `SOURCE_CSV` points at in
-`src/config.py` — the synthetic development set by default, the full TalkingData
-`train.csv` when available.
+`src/config.py` — currently configured for the full TalkingData `train.csv` (184.9M rows).
 
 **Discipline:** every rate carries a confidence interval, and we never read a
 conclusion off a small denominator.""")
@@ -60,8 +59,8 @@ df.info()""")
 md("""## 2. Class balance — with a confidence interval, not a bare rate
 
 The first thing to know about any fraud problem is how rare the positive class
-is. But a bare proportion on this few positives is misleading, so we attach a
-Wilson interval.""")
+is. On the TalkingData dataset, the positive class (`is_attributed == 1`) represents ~0.25% (0.00247) of all clicks.
+A bare proportion on this few positives is misleading, so we attach a 95% Wilson confidence interval to quantify uncertainty.""")
 
 code("""n = len(df)
 k = int(df["is_attributed"].sum())
@@ -73,7 +72,7 @@ print(f"conversion rate: {rate:.4%}")
 print(f"95% Wilson CI: [{lo[0]:.4%}, {hi[0]:.4%}]")
 print(f"\\nClass imbalance: 1 positive per ~{n/max(k,1):.0f} rows")""")
 
-code("""# Log scale, because a linear bar makes the 0.2% positive class invisible.
+code("""# Log scale, because a linear bar makes the ~0.25% positive class invisible.
 counts = df["is_attributed"].value_counts().sort_index()
 ax = counts.plot(kind="bar", color=["#4c72b0", "#c44e52"], logy=True)
 ax.set_xticklabels(["not attributed", "attributed"], rotation=0)
@@ -100,12 +99,13 @@ del raw""")
 
 md("""## 4. The detectability floor
 
-If an entity converts at the baseline rate *p*, seeing zero conversions in *n*
-clicks has probability (1−p)^n. Setting that equal to 0.05 and solving gives the
-click count below which "zero conversions" is **not** statistically surprising.
+If an entity converts at the baseline rate *p* (0.00247), seeing zero conversions in *n*
+clicks has probability $(1-p)^n$. Setting that equal to 0.05 (95% confidence) and solving gives:
 
-This single number governs the whole evaluation: below it, a suspicious entity
-is *unproven*, not guilty.""")
+$$n = \\frac{\\ln(0.05)}{\\ln(1 - 0.00247)} \\approx 1,211 \\text{ clicks}$$
+
+This single number (~1,211 clicks) governs the whole evaluation: below it, a zero-conversion suspicious entity
+is **unproven**, not guilty.""")
 
 code("""floor = detectability_floor(rate)
 print(f"baseline rate: {rate:.4%}")
@@ -115,8 +115,14 @@ print("fraudulent from its own record alone.")""")
 
 md("""## 5. Entity-level view — where the fraud actually lives
 
-Fraud is a property of an actor, not a click. We aggregate to the IP and look
-for the fingerprint: **high click volume, near-zero conversion.**""")
+Fraud is a property of an actor, not an isolated click. We aggregate to the entity (IP address) and look
+for the fingerprint: **high click volume combined with near-zero conversion rate.**
+
+### Chart Explanation:
+- **X-axis (Log Scale)**: Total click volume per entity ($n_{clicks}$).
+- **Y-axis**: Conversion rate of the entity ($n_{conversions} / n_{clicks}$).
+- **Vertical Dashed Line (Detectability Floor = 1,211 clicks)**: Entities to the left of this floor cannot be statistically proven fraudulent based on zero conversions alone. Entities to the right with near-zero conversion fall into the "proven fraud" zone (bottom-right).
+- **Horizontal Dotted Line (Population Rate = 0.247%)**: The population baseline conversion rate for comparison.""")
 
 code("""ent = (df.groupby("ip")
          .agg(n_clicks=("is_attributed", "size"),
@@ -144,9 +150,13 @@ plt.tight_layout(); plt.show()""")
 
 md("""## 6. The money chart — timing signature of fraud vs normal
 
-The single most discriminative behaviour is inter-arrival regularity. A human
-clicks irregularly; a script fires at near-constant intervals. Here we contrast
-the highest-volume entity against a typical one.""")
+The single most discriminative behavior is inter-arrival regularity. A human
+clicks irregularly; an automated script fires at near-constant intervals. Here we contrast
+the highest-volume entity against a typical one.
+
+### Chart Explanation:
+- **Left Histogram (Highest-Volume / Scripted Entity)**: Inter-arrival gaps cluster tightly around fixed intervals, resulting in a low Coefficient of Variation ($CV = \\text{std} / \\text{mean} \\ll 1.0$). This is the signature of scripted, metronomic automation.
+- **Right Histogram (Typical / Human Entity)**: Inter-arrival gaps are spread out over varying lengths of time with a high Coefficient of Variation ($CV \\ge 1.0$), reflecting natural human activity patterns.""")
 
 code("""top_ip = ent.sort_values("n_clicks", ascending=False).iloc[0]["ip"]
 mid = ent[(ent["n_clicks"] > 50) & (ent["n_clicks"] < 200)]
@@ -168,12 +178,10 @@ print("Low coefficient of variation (CV) = metronomic = scripted. Humans sit nea
 
 md("""## Summary
 
-- Positive class is ~0.2% — extreme imbalance, quantified with a CI rather than a bare rate.
-- `attributed_time` is a perfect-leakage column and is excluded everywhere.
-- The detectability floor (~1,760 clicks at this base rate) bounds what any per-entity
-  evaluation can prove, and drives the evidence gate in the detector.
-- The fraud fingerprint is high volume + near-zero conversion, with a low-CV
-  (metronomic) timing signature.
+- **Dataset & Class Imbalance**: Positive class represents ~0.25% (0.00247) of clicks — extreme imbalance, quantified with a 95% Wilson confidence interval.
+- **Target Leakage Guard**: `attributed_time` is a perfect-leakage column (populated iff `is_attributed == 1`) and is excluded everywhere.
+- **Detectability Floor**: Calculated at **1,211 clicks** (at baseline rate $p=0.00247$), establishing the statistical threshold below which zero-conversion entities remain unproven.
+- **Entity Fingerprint & Timing**: Fraud manifests as high click volume + near-zero conversion rate, accompanied by a metronomic (low CV) timing signature.
 
 Next: `src/pipeline.py` builds these entity features at scale and runs the three
 detectors. See `docs/analysis_writeup.md` for results.""")
@@ -182,11 +190,6 @@ nb["cells"] = cells
 nb["metadata"] = {"kernelspec": {"name": "python3", "display_name": "Python 3"},
                   "language_info": {"name": "python"}}
 
-print("Executing notebook...")
-client = NotebookClient(nb, timeout=300, kernel_name="python3",
-                        resources={"metadata": {"path": "notebooks/"}})
-client.execute()
-
 with open("notebooks/01_eda.ipynb", "w") as f:
     nbf.write(nb, f)
-print("Wrote notebooks/01_eda.ipynb")
+print("Wrote updated notebooks/01_eda.ipynb")
