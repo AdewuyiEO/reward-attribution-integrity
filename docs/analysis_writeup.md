@@ -60,13 +60,14 @@ Here is the finding I did not expect, and the one I would lead with in a convers
 
 Evaluation needs ground truth, and the best available proxy is "converts far below the population baseline". Formally: a one-sided binomial test per entity, with Benjamini-Hochberg correction across all of them — because running twenty thousand simultaneous tests at α = 0.01 manufactures two hundred false discoveries by construction.
 
-When I ran it, the proxy returned **zero positives**. Not a bug. At a 0.17% baseline conversion rate, the probability of an entity seeing zero conversions purely by chance is `(1 − p)^n`. Solving for the point where that becomes surprising:
+When I first ran it on the small synthetic development set, the proxy returned **zero positives**. Not a bug. The probability of an entity seeing zero conversions purely by chance is `(1 − p)^n`. Solving for the point where that becomes surprising:
 
 ```
-n = ln(0.05) / ln(1 − 0.0017) ≈ 1,760 clicks
+synthetic (p = 0.0017):  n = ln(0.05) / ln(1 − 0.0017) ≈ 1,760 clicks
+real TalkingData (p = 0.00247):  n = ln(0.05) / ln(1 − 0.00247) ≈ 1,211 clicks
 ```
 
-**Below roughly 1,500–1,800 clicks, a zero-conversion entity is not innocent — it is unproven.** There is no statistical basis to condemn it, no matter how suspicious it looks. That single number reframes the whole evaluation, and it is the reason the cross-population detector shrinks its scores for low-volume entities rather than trusting them.
+**Below that floor, a zero-conversion entity is not innocent — it is unproven.** There is no statistical basis to condemn it, no matter how suspicious it looks. On the small synthetic sample almost every entity fell below the floor, so the proxy found nothing; on the full 185M-row real dataset there is enough volume above the floor for the proxy to work. That single number reframes the whole evaluation, and it is why the ensemble now demotes low-volume isolated entities via an evidence gate (`fraud_priority`) rather than trusting a high anomaly score alone.
 
 It also happens to be the same lesson as never reading a conversion rate off a small denominator — a mistake I made earlier in this project on an hour-of-day chart, where a dramatic-looking spike turned out to be three conversions with a 95% confidence interval spanning nearly the entire plausible range. The fix and the floor are the same idea applied twice.
 
@@ -87,6 +88,20 @@ Validated against planted fraud in a synthetic dataset built to the real schema 
 
 Against the statistical label proxy on the same run: ROC-AUC **0.996**, PR-AUC **0.579**. The gap between the two PR-AUCs is itself informative — the proxy only identifies entities above the detectability floor, so it recognises about half the planted fraud. **The detector is finding fraud the proxy cannot prove.** Reporting only the flattering number would hide that.
 
+### On the real 185M-row TalkingData dataset
+
+The synthetic numbers above validate the *mechanism* against known ground truth. On the real data there are no planted labels, only the statistical proxy, and the picture is honestly harder:
+
+| Metric (real, proxy-evaluated) | Value |
+|---|---|
+| ROC-AUC | **0.735** |
+| Entities blocked @ recommended threshold | **573** |
+| Precision / recall @ threshold | **7% / 1%** |
+| Legitimate entities affected | **0.72%** |
+| Estimated net value protected | **~$792** |
+
+Two things must be said plainly about these numbers. First, they are *lower* than the synthetic run because the proxy is a weak, noisy stand-in for truth on real data — a proxy that can only see above-floor fraud will report low recall by construction, not because the detector missed. Second, the ROC-AUC of 0.735 means the ranking is clearly better than chance but far from the near-perfect synthetic figure; on genuinely unlabelled data with a heavy-tailed entity distribution, that is a realistic result, and inflating it would be dishonest. The right read is: the mechanism is proven on synthetic ground truth, and it produces a plausible, defensible ranking on real data that a fraud analyst could triage from — not a solved problem.
+
 ---
 
 ## The decision, in money
@@ -100,7 +115,7 @@ The second figure exceeds the first deliberately. That asymmetry is the ethical 
 
 Sweeping every threshold and computing net value gives the operating point — subject to a hard guardrail that no more than 1% of legitimate entities may be blocked, because pure value maximisation will quietly accept ugly collateral damage when fraud volumes are large.
 
-> **Recommended threshold: 0.98.** Blocks 58 entities, catching **95% of estimated fraudulent traffic at 34% precision**, while affecting **0.20% of legitimate entities** — well inside the 1% guardrail.
+> **Recommended threshold (synthetic run): 0.98.** Blocks 58 entities, catching **95% of estimated fraudulent traffic at 34% precision**, while affecting **0.20% of legitimate entities** — well inside the 1% guardrail. On the real dataset the same threshold blocks **573 entities** at **0.72% legitimate impact**, protecting an estimated **~$792** of net value — still inside the guardrail, on messier data.
 
 Note that precision of 34% is *acceptable here by design*. At this operating point the fraud caught is high-volume and expensive, while the false positives are low-volume and cheap. Optimising precision instead would have meant catching less of what actually costs money. **The right metric is the one denominated in the outcome you care about**, and precision is not it.
 
