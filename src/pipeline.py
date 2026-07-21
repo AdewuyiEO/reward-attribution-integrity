@@ -15,7 +15,8 @@ import pandas as pd
 from . import config, features, ingest
 from .cost_model import recommend_threshold, summarise_for_stakeholder, threshold_sweep
 from .detectors import ensemble_score
-from .evaluate import (build_ground_truth_proxy, evaluate_against_synthetic_truth,
+from .evaluate import (build_ground_truth_proxy, detectability_floor,
+                       evaluate_against_synthetic_truth,
                        evaluate_scores)
 
 
@@ -42,12 +43,20 @@ def run(csv_path=None, min_clicks=None, quiet: bool = False) -> dict:
     log(f"      entities={len(feats):,}  features={len(features.FEATURE_COLS)}")
 
     # -- 3. Detect ---------------------------------------------------------
-    log("[3/6] Running detectors: clustering | distribution | cross-population ...")
-    scored = ensemble_score(feats, features.FEATURE_COLS)
+    # Compute the detectability floor first (a global population constant, not a
+    # per-entity label) so the ensemble can evidence-gate low-volume entities.
+    labels = features.load_label_aggregates(con)
+    base_rate = labels["n_conversions"].sum() / labels["n_clicks"].sum()
+    floor = detectability_floor(base_rate)
+    log(f"[3/6] Detectability floor = {floor:,} clicks (base rate {base_rate:.5f})")
+    log("      Running detectors: clustering | distribution | cross-population ...")
+    scored = ensemble_score(feats, features.FEATURE_COLS, detectability_floor=floor)
+
+    tier_counts = scored["evidence_tier"].value_counts().to_dict()
+    log(f"      Evidence tiers: {tier_counts}")
 
     # -- 4. Evaluate -------------------------------------------------------
     log("[4/6] Evaluating against held-out labels ...")
-    labels = features.load_label_aggregates(con)
     truth = build_ground_truth_proxy(labels)
     metrics = evaluate_scores(scored, truth)
 

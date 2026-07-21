@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ### 1.2 Verify before touching real data
 
 ```bash
-pytest tests/ -q                                    # expect: 19 passed
+pytest tests/ -q                                    # expect: 22 passed
 python scripts/make_synthetic_data.py --rows 1200000
 python -m src.pipeline
 ```

@@ -55,18 +55,86 @@ def _reason_codes(merged: pd.DataFrame) -> pd.Series:
         for i in np.flatnonzero(merged["db_noise"].to_numpy()):
             reasons[i].append("behavioural outlier (density-isolated)")
 
+    # Honesty flag: anomalous but below the volume needed to prove it alone.
+    if "evidence_tier" in merged.columns:
+        low = np.isin(merged["evidence_tier"].to_numpy(), ["unproven", "suspected"])
+        for i in np.flatnonzero(low):
+            reasons[i].append("LOW EVIDENCE: below detectability floor, treat as watchlist")
+
     return pd.Series(
         ["; ".join(r) if r else "no single dominant signal" for r in reasons],
         index=merged.index,
     )
 
 
+def assign_evidence(merged: pd.DataFrame, floor: int | None) -> pd.DataFrame:
+    """Attach volume_confidence, evidence_tier, and the actionable fraud_priority.
+
+    The problem this solves
+    -----------------------
+    fraud_score answers "how anomalous is this entity's behaviour?" -- and a
+    115-click IP genuinely can look extremely anomalous. But the detectability
+    floor says that below ~1,760 clicks (at a 0.2% base rate) we cannot prove a
+    single entity is fraudulent from its own record. Ranking such an entity as a
+    top hit contradicts our own statistics.
+
+    The distinction that resolves it
+    --------------------------------
+    * INDIVIDUAL evidence (distribution, cross-population) judges one entity in
+      isolation, so it is subject to the floor.
+    * COLLECTIVE evidence (DBSCAN ring membership) is a claim about *many*
+      entities behaving identically. That coordination does not depend on any
+      single entity's volume -- a fleet of 500 low-volume bots is suspicious
+      precisely because they move together. Rings are therefore NOT demoted.
+
+    So:
+        volume_confidence = min(n_clicks / floor, 1)     for isolated entities
+                          = 1                             for ring members
+        fraud_priority    = fraud_score * volume_confidence
+
+    fraud_priority -- not fraud_score -- is what we rank and action on. This
+    turns the detectability floor from a caveat buried in the README into a
+    visible, enforced property of the output.
+    """
+    n_clicks = merged["n_clicks"].to_numpy(dtype=float)
+    is_ring = (merged["db_ring"].to_numpy()
+               if "db_ring" in merged.columns else np.zeros(len(merged), bool))
+
+    if floor and floor > 0:
+        vol_conf = np.clip(n_clicks / floor, 0.0, 1.0)
+        suspected_min = floor * 0.25
+    else:                       # no base rate available -> no gating
+        vol_conf = np.ones(len(merged))
+        suspected_min = 0.0
+
+    # Ring members keep full confidence: collective evidence overrides volume.
+    vol_conf = np.where(is_ring, 1.0, vol_conf)
+
+    tier = np.where(
+        is_ring, "ring (collective)",
+        np.where(n_clicks >= (floor or 0), "proven",
+        np.where(n_clicks >= suspected_min, "suspected", "unproven")))
+
+    merged["volume_confidence"] = vol_conf
+    merged["evidence_tier"] = tier
+    merged["fraud_priority"] = merged["fraud_score"].to_numpy() * vol_conf
+    return merged
+
+
 def ensemble_score(
     features: pd.DataFrame,
     feature_cols: list[str],
     weights: dict | None = None,
+    detectability_floor: int | None = None,
 ) -> pd.DataFrame:
-    """Run all three detectors and produce the final scored entity table."""
+    """Run all three detectors and produce the final scored entity table.
+
+    `detectability_floor` is the minimum click count at which a single entity's
+    zero-conversion record is statistically surprising (see evaluate.py). When
+    supplied, low-volume isolated entities are demoted via `fraud_priority` so
+    they cannot masquerade as top hits. It is a global population constant, not
+    a per-entity label, so using it introduces no leakage.
+    """
     weights = weights or config.DETECTOR_WEIGHTS
 
     clus = clustering_score(features, feature_cols)
@@ -87,5 +155,10 @@ def ensemble_score(
         + weights["cross_population"] * merged["cross_population_score"]
     )
 
+    merged = assign_evidence(merged, detectability_floor)
     merged["reason_codes"] = _reason_codes(merged)
-    return merged.sort_values("fraud_score", ascending=False).reset_index(drop=True)
+
+    # Rank on fraud_priority (evidence-gated), not raw anomaly score.
+    return merged.sort_values(
+        ["fraud_priority", "fraud_score"], ascending=False
+    ).reset_index(drop=True)

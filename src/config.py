@@ -48,7 +48,7 @@ LEAKAGE_COLS = ["attributed_time"]
 # ---------------------------------------------------------------------------
 # The unit of analysis. Fraud lives in entities, not in individual clicks.
 ENTITY_KEYS = ["ip"]          # alternatives: ["ip","device","os"], ["channel"]
-MIN_CLICKS = 100              # entities below this are too sparse to judge
+MIN_CLICKS = 100               # entities below this are too sparse to judge
 
 # ---------------------------------------------------------------------------
 # Detector weights (ensemble)

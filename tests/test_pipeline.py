@@ -188,6 +188,49 @@ def test_ensemble_produces_scores_and_reasons():
     assert out["reason_codes"].iloc[0] != ""
 
 
+def test_evidence_gate_demotes_low_volume_anomaly():
+    """The reported bug: a high-anomaly, low-volume entity must not rank top."""
+    from src.detectors import ensemble_score
+    df = _toy_entities()
+    # Make entity 0 behaviourally extreme but tiny in volume.
+    df.loc[0, "cv_gap"] = 0.01
+    df.loc[0, "burst_rate"] = 0.95
+    df.loc[0, "n_clicks"] = 115.0          # far below any realistic floor
+
+    out = ensemble_score(df, features.FEATURE_COLS, detectability_floor=1760)
+    row = out[out["ip"] == 0].iloc[0]
+
+    assert row["evidence_tier"] == "unproven"
+    # Its raw anomaly stays high, but its actionable priority is crushed.
+    assert row["fraud_score"] > 0.5
+    assert row["fraud_priority"] < 0.1
+    # And it is no longer the top-ranked entity.
+    assert out.iloc[0]["ip"] != 0 or out.iloc[0]["n_clicks"] >= 1760
+
+
+def test_evidence_gate_protects_high_volume():
+    """A genuinely high-volume anomaly must keep full priority."""
+    from src.detectors import ensemble_score
+    df = _toy_entities()
+    df.loc[0, "cv_gap"] = 0.01
+    df.loc[0, "burst_rate"] = 0.95
+    df.loc[0, "n_clicks"] = 20000.0
+    out = ensemble_score(df, features.FEATURE_COLS, detectability_floor=1760)
+    row = out[out["ip"] == 0].iloc[0]
+    assert row["evidence_tier"] == "proven"
+    assert row["volume_confidence"] == 1.0
+    assert abs(row["fraud_priority"] - row["fraud_score"]) < 1e-9
+
+
+def test_no_gate_without_floor():
+    """Without a floor, priority equals score (backward compatible)."""
+    from src.detectors import ensemble_score
+    df = _toy_entities()
+    out = ensemble_score(df, features.FEATURE_COLS)
+    assert (out["volume_confidence"] == 1.0).all()
+    assert (out["fraud_priority"] - out["fraud_score"]).abs().max() < 1e-9
+
+
 def test_cost_model_penalises_overblocking():
     """A threshold of 0 blocks everyone and must not be recommended."""
     from src.cost_model import recommend_threshold, threshold_sweep

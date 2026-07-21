@@ -103,20 +103,37 @@ with right:
 # Flagged entities with reasons
 # ---------------------------------------------------------------------------
 st.subheader("Flagged entities")
-flagged = scored[scored["fraud_score"] >= threshold].copy()
+# Flag on fraud_priority (evidence-gated), not the raw anomaly score. A
+# 115-click IP can look anomalous, but below the detectability floor we cannot
+# prove it alone -- so it is demoted rather than shown as a top hit.
+score_col = "fraud_priority" if "fraud_priority" in scored.columns else "fraud_score"
+
+tiers = (list(scored["evidence_tier"].unique())
+         if "evidence_tier" in scored.columns else [])
+chosen = st.sidebar.multiselect(
+    "Evidence tier", tiers, default=tiers,
+    help="'unproven' entities are below the detectability floor: anomalous but "
+         "not provable from their own record. Shown as watchlist, not top hits.",
+) if tiers else []
+
+flagged = scored[scored[score_col] >= threshold].copy()
+if chosen:
+    flagged = flagged[flagged["evidence_tier"].isin(chosen)]
 
 st.markdown(
-    f"**{len(flagged):,}** entities at or above threshold "
-    f"{threshold:.2f}, accounting for **{flagged['n_clicks'].sum():,}** clicks."
+    f"**{len(flagged):,}** entities at or above priority "
+    f"{threshold:.2f}, accounting for **{flagged['n_clicks'].sum():,}** clicks. "
+    f"Ranked by evidence-gated priority, not raw anomaly score."
 )
 
-display_cols = ["ip", "n_clicks", "fraud_score", "clustering_score",
-                "distribution_score", "cross_population_score",
+display_cols = ["ip", "n_clicks", "evidence_tier", "fraud_priority", "fraud_score",
+                "clustering_score", "distribution_score", "cross_population_score",
                 "psi_band", "reason_codes"]
 display_cols = [c for c in display_cols if c in flagged.columns]
 
 st.dataframe(
-    flagged[display_cols].head(200).style.format({
+    flagged.sort_values(score_col, ascending=False)[display_cols].head(200).style.format({
+        "fraud_priority": "{:.3f}",
         "fraud_score": "{:.3f}",
         "clustering_score": "{:.3f}",
         "distribution_score": "{:.3f}",

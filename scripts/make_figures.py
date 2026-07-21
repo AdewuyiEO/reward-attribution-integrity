@@ -77,6 +77,33 @@ def fig_detector_agreement(scored: pd.DataFrame):
     plt.close(fig)
 
 
+def fig_evidence_gate(scored: pd.DataFrame):
+    """Visualise the evidence gate: anomaly vs volume, coloured by tier."""
+    if "evidence_tier" not in scored.columns:
+        return
+    fig, ax = plt.subplots(figsize=(7, 4))
+    colours = {"proven": "#d62728", "ring (collective)": "#9467bd",
+               "suspected": "#ff7f0e", "unproven": "#7f7f7f"}
+    for tier, c in colours.items():
+        sub = scored[scored["evidence_tier"] == tier]
+        if len(sub):
+            ax.scatter(sub["n_clicks"], sub["fraud_score"], s=8, alpha=0.4,
+                       c=c, label=f"{tier} (n={len(sub):,})")
+    floor = scored.loc[scored["evidence_tier"] == "proven", "n_clicks"].min()
+    if pd.notna(floor):
+        ax.axvline(floor, ls="--", color="black", lw=1)
+        ax.annotate("detectability floor", (floor, 0.05),
+                    textcoords="offset points", xytext=(8, 0), fontsize=8)
+    ax.set_xscale("log")
+    ax.set_xlabel("clicks per entity (log scale)")
+    ax.set_ylabel("raw anomaly score")
+    ax.set_title("Evidence gate: high-anomaly low-volume entities are demoted, not trusted")
+    ax.legend(frameon=False, fontsize=7, loc="lower right")
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "evidence_gate.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     scored = pd.read_parquet(config.OUT_DIR / "scored_entities.parquet")
     sweep = pd.read_csv(config.OUT_DIR / "threshold_sweep.csv")
@@ -84,6 +111,7 @@ def main():
     fig_business_tradeoff(sweep)
     fig_score_distribution(scored)
     fig_detector_agreement(scored)
+    fig_evidence_gate(scored)
 
     corr = scored[["clustering_score", "distribution_score",
                    "cross_population_score"]].corr()
